@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Warehouse App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; }
+    #scanner { width: 100%; max-width: 400px; margin: 20px auto; }
+    button { font-size: 1.2em; padding: 15px; margin: 10px; width: 80%; }
+    .status-active { color: green; }
+    .status-waiting { color: orange; }
+    .status-empty { color: gray; }
+  </style>
+</head>
+<body>
+<h1>Warehouse App</h1>
+<div id="scanner"></div>
+<div id="result"></div>
+<a href="/logout">Logout</a>
+
+<script>
+let currentBarcode = null;
+
+Quagga.init({
+  inputStream: { name: "Live", type: "LiveStream", target: "#scanner" },
+  decoder: { readers: ["code_128_reader"] }
+}, err => { if (!err) Quagga.start(); });
+
+Quagga.onDetected(async d => {
+  const barcode = d.codeResult.code;
+  if (barcode === currentBarcode) return;
+  currentBarcode = barcode;
+  Quagga.stop();
+  const res = await fetch('/scan', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({barcode}) });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    restart();
+    return;
+  }
+  document.getElementById('result').innerHTML = `
+    <h2>Stack: ${data.location.barcode}</h2>
+    <button onclick="pickLevel('B')">Bottom</button>
+    <button onclick="pickLevel('M')">Middle</button>
+    <button onclick="pickLevel('T')">Top</button>
+  `;
+});
+
+function pickLevel(level) {
+  const fullCode = currentBarcode + '-' + level;
+  showSpot(fullCode);
+}
+
+async function showSpot(fullCode) {
+  const res = await fetch(`/get_spot?code=${fullCode}`);
+  const spot = await res.json() || {status: 'EMPTY'};
+  document.getElementById('result').innerHTML = `
+    <h2>${fullCode}</h2>
+    <p>Ingredient: ${spot.ingredient_name || 'EMPTY'}</p>
+    <p>Batch: ${spot.batch_number || 'N/A'}</p>
+    <p>BBF: ${spot.best_before_date || 'N/A'}</p>
+    <p>KG: ${spot.quantity || '0'}</p>
+    <p>Status: <span class="status-${spot.status.toLowerCase()}">${spot.status}</span></p>
+    <input id="ing" placeholder="Ingredient Name">
+    <input id="batch" placeholder="Batch Number">
+    <input id="bbf" type="date">
+    <input id="kg" type="number" step="0.1" placeholder="KG">
+    <button onclick="updateSpot('${fullCode}', 'ACTIVE')">Set ACTIVE</button>
+    <button onclick="updateSpot('${fullCode}', 'WAITING')">Set WAITING</button>
+    <button onclick="updateSpot('${fullCode}', 'EMPTY')">Set EMPTY</button>
+    <button onclick="restart()">Scan Another</button>
+  `;
+}
+
+async function updateSpot(fullCode, status) {
+  const ing = document.getElementById('ing').value.trim();
+  const batch = document.getElementById('batch').value.trim();
+  const bbf = document.getElementById('bbf').value;
+  const kg = document.getElementById('kg').value.trim();
+  const data = { full_code: fullCode, status };
+  if (ing) data.ingredient_name = ing;
+  if (batch) data.batch_number = batch;
+  if (bbf) data.bbf = bbf;
+  if (kg) data.kg = kg;
+  await fetch('/update_spot', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+  alert("Updated!");
+  restart();
+}
+
+function restart() {
+  currentBarcode = null;
+  document.getElementById('result').innerHTML = '';
+  Quagga.start();
+}
+</script>
+</body>
+</html>
